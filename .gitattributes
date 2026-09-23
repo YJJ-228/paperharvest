@@ -1,0 +1,9 @@
+# Store every text file with LF, whatever the checkout platform does.
+# Keeps the shell blocks in .github/workflows/ from acquiring a stray \r.
+* text=auto eol=lf
+
+*.csv binary
+# `text=auto` would normally spot these, but an icon mangled by a line-ending
+# conversion is a corrupt icon, and silence is the wrong failure mode.
+*.ico binary
+*.icns binary

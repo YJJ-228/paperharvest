@@ -1,0 +1,143 @@
+name: build
+
+# Builds a standalone executable for Windows, Linux and macOS.
+#
+#   - every push to main, so the build never silently rots
+#   - any v* tag, which additionally publishes a GitHub Release
+#   - manually, from the Actions tab ("Run workflow")
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+# The release job uploads assets, which needs write access to the repo.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide the other two.
+      fail-fast: false
+      # `name` is the PyInstaller --name, i.e. the basename of the output file.
+      # It carries the target so the three artifacts do not collide when the
+      # release job merges them into a single directory: a bare "paperharvest"
+      # from Linux and macOS would overwrite each other, leaving the release
+      # with one file that looks identical to all of them.
+      # `binary` is that name as it lands in dist/ -- PyInstaller appends .exe
+      # on Windows and nothing elsewhere.
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x86_64
+            name: paperharvest-windows-x86_64
+            binary: paperharvest-windows-x86_64.exe
+          - os: ubuntu-latest
+            target: linux-x86_64
+            name: paperharvest-linux-x86_64
+            binary: paperharvest-linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+            name: paperharvest-macos-arm64
+            binary: paperharvest-macos-arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # uv run resolves the project's dependencies and pyinstaller into an
+      # ephemeral environment, so nothing is added to pyproject.toml.
+      #
+      # The icon is Windows-only here, and that is not a shortcut: PyInstaller
+      # writes an icon into a PE resource on Windows and into a .app bundle on
+      # macOS -- and this build produces a bare Mach-O on macOS (an .app needs
+      # --windowed, which would detach the console the TUI needs), where an .ico
+      # is rejected outright. On Linux, --icon is ignored with a warning. So
+      # passing it everywhere would break the macOS job for no gain.
+      #
+      # It is also conditional on the file existing: a placeholder nobody
+      # replaces is worse than no icon at all, and the build should not go red
+      # just because the artwork has not landed yet. The path resolves against
+      # the spec file's directory, i.e. the repo root in the absence of
+      # --specpath -- adding --specpath later would silently move it.
+      - name: Build executable
+        shell: bash
+        run: |
+          icon_args=()
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            if [ -f assets/icon.ico ]; then
+              icon_args=(--icon assets/icon.ico)
+            else
+              echo "::warning::assets/icon.ico is missing - building with PyInstaller's default icon"
+            fi
+          fi
+          uv run --with pyinstaller pyinstaller \
+            --onefile \
+            --console \
+            --name "${{ matrix.name }}" \
+            --collect-all questionary \
+            --collect-all prompt_toolkit \
+            "${icon_args[@]}" \
+            entry.py
+
+      # --help exercises the interpreter, the stdlib, argparse and the whole
+      # paperharvest package. It does not touch the TUI, which is imported
+      # lazily: the next step covers that.
+      - name: Smoke test (CLI)
+        shell: bash
+        run: ./dist/${{ matrix.binary }} --help
+
+      # Without a TTY, prompt_toolkit gives up differently on every platform
+      # (on Windows: NoConsoleScreenBufferError; elsewhere it may read EOF and
+      # cancel the menu), so the exit code proves nothing either way. What must
+      # never happen is a module missing from the bundle.
+      - name: Smoke test (TUI stack bundled)
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          printf '\n\n\n\n' | ./dist/${{ matrix.binary }} > tui.log 2>&1 || true
+          cat tui.log
+          if grep -qE 'ModuleNotFoundError|ImportError' tui.log; then
+            echo "::error::frozen binary is missing a bundled module"
+            exit 1
+          fi
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: paperharvest-${{ matrix.target }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all executables
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # One asset per platform, each named after its target. Fewer than three
+      # means two artifacts collided on filename and silently overwrote each
+      # other, which is exactly how a release ends up with one file standing in
+      # for all of them.
+      - name: Check every platform is there
+        run: |
+          ls -l dist
+          for f in paperharvest-windows-x86_64.exe paperharvest-linux-x86_64 paperharvest-macos-arm64; do
+            test -f "dist/$f" || { echo "::error::dist/$f is missing"; exit 1; }
+          done
+
+      - name: Attach them to the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
