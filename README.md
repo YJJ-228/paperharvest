@@ -30,13 +30,15 @@ With no arguments you get the interactive interface:
 
 The menu labels are Chinese; nothing written to the CSV is. Titles, authors and section names are copied from the source site verbatim.
 
-The year menu only lists years that actually have a published programme (CHI's years come from SIGCHI's conference list; for IEEE VIS you type the year in directly).
+The year menu only lists years that actually have a published programme. CHI, UIST and IUI read theirs from SIGCHI's conference list; IEEE VIS has no such list, so its years are probed one page at a time (which is why its menu starts at 2025 — see [IEEE VIS years](#ieee-vis-years)). If a source's list cannot be fetched, you type the year in instead.
+
+Leaving the year out — in the menu or via `--year` — picks the current year when the source publishes it, and otherwise the newest year it does publish. The source's own list decides, rather than stepping back one year at a time, because a programme can lag the calendar (UIST 2026 is not published yet, so UIST resolves to 2025) and years can be missing outright (IUI publishes no 2020 or 2023 programme, so a naive one-year step back from 2023 would ask for a year that does not exist).
 
 You can skip the interaction entirely:
 
 ```powershell
 uv run python -m paperharvest --conference chi --year 2026 --output chi-2026.csv
-uv run python -m paperharvest --conference uist          # the source's default year
+uv run python -m paperharvest --conference uist          # newest available year, 2025 today
 ```
 
 Installed as a command, it works from any directory:
@@ -75,7 +77,17 @@ Links are never invented from a guessed DOI or a search result. Titles are kept 
 
 ## How each source is fetched
 
-**IEEE VIS** is a straightforward scrape of the paper listing page on `ieeevis.org`, parsed as HTML.
+**IEEE VIS** is a straightforward scrape of the static paper listing page on `ieeevis.org`, parsed as HTML.
+
+### IEEE VIS years
+
+IEEE VIS is the one source that cannot enumerate its own years, and the reason its menu stops at 2025 rather than reaching back to 2018 like the others.
+
+The site publishes no index of its years, and its URL scheme changed in 2025. Up to 2024 the papers lived under `/year/<year>/info/papers-sessions`, served by an Angular application: the paper data is rendered at runtime and never reaches the HTML a plain client receives. That response is a navigation shell — 2018's page carries 51 KB of menu text and no papers at all — so the same obstacle as SIGCHI, minus the open JSON endpoint that solves it there. From 2025 on the listings are static pages under `/year/<year>/info/program/papers_list`, and only those are read.
+
+That distinction matters for how availability is decided. Older years answer `HTTP 200` with a shell, so a status code is **not** a usable test — treating it as one would advertise years that harvest to nothing. The probe therefore uses the static scheme alone, where unresolvable years genuinely return `404`.
+
+The probe walks back from the current year, stopping at the first gap *after* the newest hit that resolves. A miss at the top is skipped rather than treated as the end, because next year's page appears before the calendar turns: in January 2027 the year is not up yet, and ending the walk there would leave the menu empty. The walk is capped at four years back, so the menu costs a few requests at most — the page for whichever year you then pick is already fetched, so it is not requested twice.
 
 **ACM CHI / UIST / IUI** publish their programmes on `programs.sigchi.org`, an Angular application: a plain HTTP request returns an empty shell, and the paper data is rendered client-side. The prerendered version served to search engine crawlers is incomplete (in testing, CHI 2026 rendered only Monday; Tuesday through Friday were empty), and the API behind it requires credentials baked into the application. Neither route was taken.
 
@@ -95,7 +107,7 @@ Deciding what counts as a paper looks at both the item's own type **and** the ty
 
 1. Add `paperharvest/adapters/<conference>.py`.
 2. Implement `parse(text: str, source_url: str, year: int) -> list[Paper]`, reusing `paperharvest.models.Paper`. An adapter is only responsible for parsing its source's HTML/API; networking, CSV writing and the TUI belong to the shared layer.
-3. Register the conference ID, name, default-year URL and adapter in `paperharvest/registry.py`.
+3. Register the conference ID, name, year-URL function and adapter in `paperharvest/registry.py`.
 4. Add samples under `fixtures/` (create it yourself) and confirm links, sections, authors and Unicode titles are handled.
 
 An adapter receives the **raw response body**, so JSON APIs work too (call `json.loads` inside the adapter). When you return `list[Paper]`, fill in `source_url`, `conference` and `year`. A skeleton:
@@ -128,22 +140,27 @@ from .adapters import example, ieeevis
 
 SOURCES = {
     "vis": Source(
-        name="IEEE VIS", description="可视化 · 2026", default_year=2026,
-        url_for_year=lambda year: f"https://ieeevis.org/year/{year}/info/program/papers_list",
+        name="IEEE VIS", description="可视化 · 2026",
+        url_for_year=ieeevis.page_url,
         parse=ieeevis.parse,
+        years=ieeevis.year_lister,
     ),
     "example": Source(
-        name="ExampleConf", description="示例 · 2026", default_year=2026,
+        name="ExampleConf", description="示例 · 2026",
         url_for_year=lambda year: f"https://example.org/{year}/papers",
         parse=example.parse,
     ),
 }
 ```
 
+There is no `default_year`: the year to use is resolved from the current date and the source's own year list, so nothing goes stale each January. `registry.newest_year()` and `resolve_year()` do that work, and `resolve_year(source, fetch, today=...)` takes an injectable date so the walk-back can be exercised without waiting for the calendar.
+
 `Source` has two optional hooks for sources whose data is not a single page:
 
 - `payload_for_year(year, fetch) -> (body, source page URL)`: use it when the body takes several queries to assemble; `gather()` then takes this path instead (SIGCHI uses it to resolve the conference id and version). Unset, a single page is fetched from `url_for_year`.
-- `years(fetch) -> list[int]`: when the source can enumerate its years, the TUI offers a menu instead of making the user type a year blind.
+- `years(fetch) -> list[int]`: when the source can enumerate its years, the TUI offers a menu instead of making the user type a year blind, and the newest listed year that is not in the future becomes the default. Without it — or if it raises — the default falls back to the current year. A source that can only answer this by probing should walk back from the current year, as `ieeevis.year_lister` does, and skip a miss at the top before treating one as the end.
+
+An adapter that resolves a year through a lookup rather than by fetching one URL should raise `models.UnknownYear`, listing the years that do exist, instead of letting the failed page fetch speak for itself — that keeps a bad year reported in one readable place, and both SIGCHI and IEEE VIS do it.
 
 While developing an adapter, save the target page to `fixtures/<name>.html` and iterate on the parsing logic offline; go online only once it works. That avoids hammering the target site:
 

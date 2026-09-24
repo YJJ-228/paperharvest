@@ -22,16 +22,12 @@ import json
 from collections.abc import Callable
 from urllib.parse import urlparse
 
-from ..models import Paper
+from ..models import Paper, UnknownYear
 
 CACHE = "https://files.sigchi.org/conference/cache"
 PROGRAM_PAGE = "https://programs.sigchi.org/{short}/{year}/program"
 
 Fetcher = Callable[[str], str]
-
-
-class UnknownConference(LookupError):
-    """The requested conference/year is not in the public programme list."""
 
 
 def page_url(short_name: str, year: int) -> str:
@@ -71,7 +67,7 @@ def loader(short_name: str, year: int, fetch: Fetcher) -> tuple[str, str]:
     )
     if conference_id is None:
         available = f"{min(years)}–{max(years)}" if years else "无"
-        raise UnknownConference(
+        raise UnknownYear(
             f"{short_name} 没有 {year} 年的节目单（可选年份：{available}）"
         )
     version = json.loads(fetch(f"{CACHE}/{conference_id}/version-2"))["scheduleVersion"]

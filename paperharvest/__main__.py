@@ -3,7 +3,7 @@ import sys
 
 from .export import write_csv
 from .fetch import fetch_html
-from .registry import SOURCES
+from .registry import SOURCES, resolve_year
 
 
 def _use_utf8_output():
@@ -28,7 +28,10 @@ def main():
     _use_utf8_output()
     parser = argparse.ArgumentParser(description="Collect conference paper listings into CSV")
     parser.add_argument("--conference", choices=SOURCES, help="来源 ID；省略则进入交互界面")
-    parser.add_argument("--year", type=int, default=None, help="年份；省略则用该来源的默认年份")
+    parser.add_argument(
+        "--year", type=int, default=None,
+        help="年份；省略则取该来源最新的可用年份（本年为上限）",
+    )
     parser.add_argument("--output", default="", help="CSV 路径；省略则用 <来源>-<年份>.csv")
     args = parser.parse_args()
 
@@ -38,8 +41,8 @@ def main():
         raise SystemExit(run_tui())
 
     source = SOURCES[args.conference]
-    year = args.year or source.default_year
     try:
+        year = args.year or resolve_year(source, fetch_html)
         payload, source_url = source.gather(year, fetch_html)
         papers = source.parse(payload, source_url, year)
         if not papers:

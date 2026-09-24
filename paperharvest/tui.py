@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from .export import write_csv
 from .fetch import fetch_html
-from .registry import SOURCES
+from .registry import SOURCES, newest_year
 
 ACCENT = "#5fafff"
 MUTED = "#808080"
@@ -94,27 +94,37 @@ def _ask_source():
 
 
 def _ask_year(source, fetch):
+    """Pick a year, defaulting to the newest the source actually publishes.
+
+    The list is fetched once and reused for the default: resolving it again
+    would repeat IEEE VIS's probing, whose misses are not memoised.
+    """
     import questionary
 
+    years: list[int] = []
     if source.years is not None:
         _emit(f"  正在获取 {source.name} 的可选年份…\n", color=MUTED)
         try:
             years = source.years(fetch)
         except Exception as exc:
             _emit(f"  取不到年份列表（{exc}），请手动输入。\n")
-            years = []
-        if years:
-            answer = questionary.select(
-                "选择年份",
-                choices=[str(year) for year in years],
-                style=_style(),
-                instruction="(↑↓ 选择, Enter 确认)",
-            ).ask()
-            return int(answer) if answer else None
+
+    # Empty years still has to name something, and does: the current year.
+    default = str(newest_year(years))
+
+    if years:
+        answer = questionary.select(
+            "选择年份",
+            choices=[str(year) for year in years],
+            default=default,
+            style=_style(),
+            instruction="(↑↓ 选择, Enter 确认)",
+        ).ask()
+        return int(answer) if answer else None
 
     answer = questionary.text(
         "年份",
-        default=str(source.default_year),
+        default=default,
         style=_style(),
         validate=lambda value: value.strip().isdigit() or "请输入数字年份",
     ).ask()

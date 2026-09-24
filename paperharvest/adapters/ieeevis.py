@@ -1,11 +1,59 @@
 import re
+from collections.abc import Callable
+from datetime import date
 from html.parser import HTMLParser
+from urllib.error import HTTPError
 from urllib.parse import urljoin
 
 from ..models import Paper
 
+Fetcher = Callable[[str], str]
+
+PAPERS_PAGE = "https://ieeevis.org/year/{year}/info/program/papers_list"
+
 # The listing marks each paper's place with a trailing "· City"; it is not an author.
 LOCATION = re.compile(r"\s*·\s*\S+\s*$")
+
+
+def page_url(year: int) -> str:
+    """The page a human would open to read this listing.
+
+    The site's scheme is not stable across years. Up to 2024 the papers lived
+    under ``/info/papers-sessions``, served as an Angular app whose paper data
+    never reaches the HTML a plain client receives; from 2025 on they are
+    static and addressable here. Only the static scheme is used, which is why
+    older years are not offered at all (see :func:`year_lister`).
+    """
+    return PAPERS_PAGE.format(year=year)
+
+
+def year_lister(fetch: Fetcher, today: date | None = None, lookback: int = 4) -> list[int]:
+    """Years with a published listing, newest first.
+
+    IEEE VIS publishes no index of its own years, so this probes the pages
+    one at a time rather than reading a list. Probing the static scheme alone
+    is what keeps 2018–2024 out: those pages answer 200 with a shell the
+    parser cannot read, so an HTTP status on its own would advertise years
+    that harvest to nothing.
+
+    A miss at the top is skipped rather than treated as the end — next year's
+    page appears before the calendar turns, so an unbroken run has to start
+    below it — while a gap *after* the newest hit ends the walk. Either way
+    ``lookback`` bounds the requests spent.
+    """
+    current = (today or date.today()).year
+    years: list[int] = []
+    for year in range(current, current - lookback, -1):
+        try:
+            fetch(page_url(year))
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            if years:
+                break
+            continue
+        years.append(year)
+    return years
 
 
 class _VisParser(HTMLParser):
