@@ -172,13 +172,13 @@ The workflow in `.github/workflows/build.yml` is the supported path, but the sam
 
 ```powershell
 uv run --with pyinstaller pyinstaller --onefile --console --name paperharvest `
-  --icon assets\icon.ico `
+  --icon paperharvest\assets\icon.ico `
   --collect-all questionary --collect-all prompt_toolkit entry.py
 # → dist\paperharvest.exe
 ```
 
 `--console` is required: the TUI needs a real console, so a windowed build would fail immediately. `entry.py` exists rather than `paperharvest/__main__.py` because PyInstaller runs its entry script as a top-level `__main__` with no package context, which breaks `__main__.py`'s relative imports. `--collect-all` guards the platform-specific backends prompt_toolkit selects at runtime.
 
-`--icon` is Windows-only. PyInstaller writes the icon into the executable's PE resource there, but a Linux ELF has nowhere to put one, and this build produces a bare Mach-O on macOS rather than an `.app` bundle — a bundle needs `--windowed`, which would detach the console the TUI needs. The workflow passes the flag on Windows alone, and only when `assets/icon.ico` exists, so a checkout without the artwork still builds.
+`--icon` is Windows-only. PyInstaller writes the icon into the executable's PE resource there, but a Linux ELF has nowhere to put one, and this build produces a bare Mach-O on macOS rather than an `.app` bundle — a bundle needs `--windowed`, which would detach the console the TUI needs. The workflow passes the flag on Windows alone, and only when `paperharvest/assets/icon.ico` exists, so a checkout without the artwork still builds.
 
 Downloading full texts is deliberately not implemented: licensing, authentication and open-access rules differ too much between publishers. It should arrive as a separate, explicitly opt-in OA downloader that records licence and provenance and enforces rate limits.

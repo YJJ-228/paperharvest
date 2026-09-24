@@ -8,7 +8,9 @@ name: build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # `master` is the default branch here; `main` is kept so a rename does not
+    # silently stop the build from running.
+    branches: [main, master]
     tags: ["v*"]
 
 # The release job uploads assets, which needs write access to the repo.
@@ -64,15 +66,20 @@ jobs:
       # just because the artwork has not landed yet. The path resolves against
       # the spec file's directory, i.e. the repo root in the absence of
       # --specpath -- adding --specpath later would silently move it.
+      #
+      # The icon lives inside the package (paperharvest/assets/), not at the
+      # repo root: `assets/icon.ico` matches nothing, so the guard below quietly
+      # took the else branch and every build shipped PyInstaller's default icon.
       - name: Build executable
         shell: bash
         run: |
+          icon=paperharvest/assets/icon.ico
           icon_args=()
           if [ "${{ runner.os }}" = "Windows" ]; then
-            if [ -f assets/icon.ico ]; then
-              icon_args=(--icon assets/icon.ico)
+            if [ -f "$icon" ]; then
+              icon_args=(--icon "$icon")
             else
-              echo "::warning::assets/icon.ico is missing - building with PyInstaller's default icon"
+              echo "::warning::$icon is missing - building with PyInstaller's default icon"
             fi
           fi
           uv run --with pyinstaller pyinstaller \
